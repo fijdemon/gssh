@@ -213,9 +213,9 @@ func (m FormModel) View() string {
 	// 显示提示信息
 	b.WriteString("\n")
 	if m.currentIndex < len(m.inputs)-1 {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("按 Enter 继续下一个字段 | 输入框为空时按 Backspace 返回上一项 | Esc 取消"))
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("按 Enter 继续下一个字段 | ↑/↓ 移动 | 输入框为空时按 Backspace 返回上一项 | Esc 取消"))
 	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("按 Enter 保存 | 输入框为空时按 Backspace 返回上一项 | Esc 取消"))
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("按 Enter 保存 | ↑/↓ 移动 | 输入框为空时按 Backspace 返回上一项 | Esc 取消"))
 	}
 
 	b.WriteString("\n")

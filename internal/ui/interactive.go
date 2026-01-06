@@ -14,6 +14,7 @@ import (
 // Model UI模型
 type Model struct {
 	list          list.Model
+	delegate      multiLineDelegate // 保存 delegate 引用以便更新搜索词
 	servers       []config.Server
 	config        *config.Config
 	search        textinput.Model
@@ -24,9 +25,10 @@ type Model struct {
 	width         int
 	height        int
 	formMode      bool
-	form          FormModel
-	deleteConfirm bool
-	pendingServer *config.Server // 待连接的服务器，在退出tea后执行
+	form              FormModel
+	deleteConfirm     bool
+	deleteConfirmInput textinput.Model // 删除确认输入框
+	pendingServer     *config.Server   // 待连接的服务器，在退出tea后执行
 }
 
 // Init 初始化
@@ -64,6 +66,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.formMode {
 			m.form.width = msg.Width
 			m.form.height = msg.Height
+		} else if m.deleteConfirm {
+			// 删除确认模式下，更新输入框宽度
+			if msg.Width > 20 {
+				m.deleteConfirmInput.Width = msg.Width - 20
+			}
 		} else {
 			m.list.SetWidth(msg.Width)
 			// 预留标题、搜索框、上下分割线和底部帮助等固定行数
@@ -100,20 +107,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 删除确认模式
 		if m.deleteConfirm {
 			switch msg.String() {
-			case "y", "Y":
+			case "esc":
+				// Esc 取消删除
+				m.deleteConfirm = false
+				m.deleteConfirmInput.Blur()
+				m.deleteConfirmInput.SetValue("")
+				return m, nil
+			case "enter":
+				// 回车确认删除
 				selectedItem := m.list.SelectedItem()
 				if item, ok := selectedItem.(item); ok {
-					m.config.DeleteServer(item.server.Name)
-					config.Save(m.config)
-					m.refreshList()
+					inputName := strings.TrimSpace(m.deleteConfirmInput.Value())
+					serverName := item.server.Name
+					// 只有输入的名称完全匹配时才执行删除
+					if inputName == serverName {
+						m.config.DeleteServer(serverName)
+						config.Save(m.config)
+						m.refreshList()
+						m.deleteConfirm = false
+						m.deleteConfirmInput.Blur()
+						m.deleteConfirmInput.SetValue("")
+						// 确保列表选中第一个元素
+						if len(m.list.Items()) > 0 {
+							m.list.Select(0)
+						}
+					}
+					// 如果不匹配，不清除输入，让用户重新输入
 				}
-				m.deleteConfirm = false
 				return m, nil
-			case "n", "N", "esc":
-				m.deleteConfirm = false
-				return m, nil
+			default:
+				// 处理输入
+				var cmd tea.Cmd
+				m.deleteConfirmInput, cmd = m.deleteConfirmInput.Update(msg)
+				return m, cmd
 			}
-			return m, nil
 		}
 
 		// 预搜索模式
@@ -231,10 +258,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			selectedItem := m.list.SelectedItem()
-			if _, ok := selectedItem.(item); ok {
+			if item, ok := selectedItem.(item); ok {
 				m.deleteConfirm = true
+				// 初始化删除确认输入框
+				deleteInput := textinput.New()
+				deleteInput.Placeholder = fmt.Sprintf("输入服务器名称 '%s' 以确认删除", item.server.Name)
+				deleteInput.CharLimit = 100
+				deleteInput.Width = 60
+				deleteInput.Focus()
+				m.deleteConfirmInput = deleteInput
 			}
-			return m, nil
+			return m, textinput.Blink
 
 		case "e":
 			// 编辑服务器
@@ -286,7 +320,21 @@ func (m Model) View() string {
 	if m.deleteConfirm {
 		selectedItem := m.list.SelectedItem()
 		if item, ok := selectedItem.(item); ok {
-			return fmt.Sprintf("\n确认删除服务器 '%s'? (y/n)\n", item.server.Name)
+			var b strings.Builder
+			b.WriteString("\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("⚠️  危险操作：删除服务器"))
+			b.WriteString("\n\n")
+			b.WriteString(fmt.Sprintf("服务器名称: %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render(item.server.Name)))
+			b.WriteString(fmt.Sprintf("地址: %s\n", item.server.GetAddress()))
+			b.WriteString(fmt.Sprintf("用户: %s\n", item.server.User))
+			b.WriteString("\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("请输入服务器名称以确认删除:"))
+			b.WriteString("\n")
+			b.WriteString(m.deleteConfirmInput.View())
+			b.WriteString("\n\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("提示: 输入完整的服务器名称并按 Enter 确认，或按 Esc 取消"))
+			b.WriteString("\n")
+			return b.String()
 		}
 	}
 
@@ -382,6 +430,7 @@ func NewModel() (*Model, error) {
 	// 创建列表，使用支持多行的自定义 delegate
 	delegate := multiLineDelegate{
 		DefaultDelegate: list.NewDefaultDelegate(),
+		searchTerm:      "", // 初始搜索词为空
 	}
 	// 设置选中样式（使用lipgloss颜色）
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(lipgloss.Color("212"))
@@ -404,10 +453,11 @@ func NewModel() (*Model, error) {
 	search.Width = 50
 
 	m := &Model{
-		list:    l,
-		servers: cfg.Servers,
-		config:  cfg,
-		search:  search,
+		list:     l,
+		delegate: delegate, // 保存 delegate 引用
+		servers:  cfg.Servers,
+		config:   cfg,
+		search:   search,
 	}
 
 	return m, nil

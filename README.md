@@ -35,8 +35,14 @@ gssh <server-name>
 ### 使用 go install
 
 ```bash
+# 安装最新版本（会自动获取版本号）
 go install github.com/fijdemon/gssh@latest
+
+# 安装指定版本
+go install github.com/fijdemon/gssh@v1.0.3
 ```
+
+> **版本号说明**：使用 `go install` 安装时，版本号会自动从模块版本获取（如 `v1.0.3`）。
 
 ### 系统依赖
 

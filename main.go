@@ -3,11 +3,28 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/fijdemon/gssh/cmd"
 	"github.com/fijdemon/gssh/internal/config"
 	"github.com/fijdemon/gssh/internal/ssh"
 )
+
+// getVersion 获取版本号
+// 从 runtime/debug.ReadBuildInfo() 获取模块版本（适用于 go install 安装的情况）
+func getVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		// 检查 Main 模块是否是当前模块
+		if info.Main.Path == "github.com/fijdemon/gssh" {
+			// 如果是从 go install @version 安装的，Main.Version 会是版本号
+			if info.Main.Version != "" && info.Main.Version != "(devel)" {
+				return info.Main.Version
+			}
+		}
+	}
+	// 默认返回 "dev"（开发版本或本地构建）
+	return "dev"
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -30,7 +47,7 @@ func main() {
 	case "push":
 		err = cmd.RunPush()
 	case "version":
-		fmt.Println("gssh version 0.1.0")
+		fmt.Printf("gssh version %s\n", getVersion())
 	case "help", "-h", "--help":
 		printUsage()
 	default:

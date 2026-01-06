@@ -50,13 +50,18 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "backspace":
 			// 如果当前输入框为空，返回上一项
-			if m.inputs[m.currentIndex].Value() == "" && m.currentIndex > 0 {
+			if m.inputs[m.currentIndex].Value() != "" {
+				break
+			}
+			fallthrough
+		case "up":
+			if m.currentIndex > 0 {
 				m.currentIndex--
 				m.inputs[m.currentIndex].Focus()
 				return m, textinput.Blink
 			}
 
-		case "enter":
+		case "enter", "down":
 			// 验证当前字段（如果是必填字段）
 			if m.isRequiredField(m.currentIndex) && m.inputs[m.currentIndex].Value() == "" {
 				// 必填字段为空，不继续
@@ -65,6 +70,9 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// 如果是最后一个字段，保存
 			if m.currentIndex == len(m.inputs)-1 {
+				if msg.String() == "down" { // 如果是down不保存，什么都不做
+					return m, nil
+				}
 				return m.saveServer()
 			}
 
@@ -153,6 +161,8 @@ func (m FormModel) saveServer() (tea.Model, tea.Cmd) {
 	// 调用保存回调
 	if m.onSave != nil {
 		if err := m.onSave(server); err != nil {
+			// 打印错误，让用户知道保存失败原因（例如名称重复等）
+			fmt.Printf("保存服务器失败: %v\n", err)
 			return m, nil
 		}
 	}
@@ -276,8 +286,6 @@ func NewFormModel(editingServer *config.Server, onSave func(config.Server) error
 	inputs[7].CharLimit = 20
 
 	inputs[8].Placeholder = "留空则不存储密码"
-	inputs[8].EchoMode = textinput.EchoPassword
-	inputs[8].EchoCharacter = '*'
 
 	inputs[9].Placeholder = "~/.ssh/id_rsa"
 	inputs[9].CharLimit = 200

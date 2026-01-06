@@ -79,10 +79,7 @@ func (s *Server) UpdateLastUsed() {
 
 // GetDisplayName 获取显示名称（包含描述）
 func (s *Server) GetDisplayName() string {
-	if s.Description != "" {
-		return fmt.Sprintf("[%s] %s", s.Name, s.Description)
-	}
-	return s.Name
+	return fmt.Sprintf("[%s] %s", s.Name, s.Description)
 }
 
 // GetAddress 获取完整地址

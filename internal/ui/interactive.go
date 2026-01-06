@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -10,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fijdemon/gssh/internal/config"
-	"github.com/fijdemon/gssh/internal/ssh"
 )
 
 // Model UI模型
@@ -20,6 +18,7 @@ type Model struct {
 	config        *config.Config
 	search        textinput.Model
 	searchMode    bool
+	preSearchMode bool // 预搜索模式：搜索框高亮但未激活输入
 	selectedGroup string
 	selectedTags  []string
 	width         int
@@ -35,6 +34,27 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
+// enterPreSearchMode 进入预搜索模式
+func (m *Model) enterPreSearchMode() (tea.Model, tea.Cmd) {
+	m.preSearchMode = true
+	if len(m.list.Items()) > 0 {
+		m.list.Select(-1)
+	}
+	return *m, nil
+}
+
+// enterSearchMode 进入搜索模式
+func (m *Model) enterSearchMode() (tea.Model, tea.Cmd) {
+	m.preSearchMode = false
+	m.searchMode = true
+	m.search.Focus()
+	if len(m.list.Items()) > 0 {
+		m.list.Select(-1)
+	}
+	m.refreshList()
+	return *m, textinput.Blink
+}
+
 // Update 更新模型
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -46,7 +66,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.form.height = msg.Height
 		} else {
 			m.list.SetWidth(msg.Width)
-			m.list.SetHeight(msg.Height - 10)
+			// 预留标题、搜索框、上下分割线和底部帮助等固定行数
+			// 标题3行 + 搜索框2行 + 列表上方分割线1行 + 列表下方空行1行 + 底部帮助4行 = 11行
+			// 由于每个 item 占 4 行（Title 1行 + Description 3行），列表高度需要是 4 的倍数
+			availableHeight := max(msg.Height-11, 4)
+			// 确保列表高度不超过可用空间
+			m.list.SetHeight(availableHeight)
 		}
 		return m, nil
 
@@ -91,23 +116,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// 预搜索模式
+		if m.preSearchMode {
+			switch msg.String() {
+			case "enter", "a", "i":
+				// 回车进入搜索模式
+				m.preSearchMode = false
+				return m.enterSearchMode()
+			case "j":
+				// 按 j 返回列表第一个，退出预搜索模式
+				m.preSearchMode = false
+				if len(m.list.Items()) > 0 {
+					m.list.Select(0)
+				}
+				return m, nil
+			case "backspace":
+				m.search.SetValue("")
+				m.refreshList()
+				return m, nil
+			case "esc":
+				return m, nil
+			case "q", "ctrl+c":
+				return m, tea.Quit
+			case "/":
+				return m.enterSearchMode()
+			}
+			return m, nil
+		}
+
 		// 搜索模式
 		if m.searchMode {
 			switch msg.String() {
 			case "esc":
 				m.searchMode = false
+				m.preSearchMode = true
 				m.search.Blur()
 				return m, nil
 			case "enter":
 				m.searchMode = false
 				m.search.Blur()
-				// 应用搜索过滤
+				m.preSearchMode = true
 				return m, nil
 			case "backspace":
 				// 如果搜索框为空，退出搜索模式
 				if m.search.Value() == "" {
 					m.searchMode = false
 					m.search.Blur()
+					// 退出搜索模式时，确保列表选中第一个元素
+					if len(m.list.Items()) > 0 {
+						m.list.Select(0)
+					}
 					return m, nil
 				}
 				// 否则正常处理删除
@@ -126,20 +184,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "/":
-			m.searchMode = true
-			m.search.Focus()
-			// 取消列表选中
-			if len(m.list.Items()) > 0 {
-				m.list.Select(-1)
-			}
-			m.refreshList()
-			return m, textinput.Blink
+			return m.enterSearchMode()
 
 		case "j":
 			m.list.CursorDown()
 			return m, nil
 
 		case "k":
+			if m.list.Cursor() == 0 && m.list.Paginator.Page == 0 {
+				// 如果已经在第一个位置，按 k 进入预搜索模式
+				return m.enterPreSearchMode()
+			}
 			m.list.CursorUp()
 			return m, nil
 
@@ -206,6 +261,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.form.height = m.height
 			}
 			return m, nil
+		case "esc":
+			return m, nil
 		}
 	}
 
@@ -265,13 +322,21 @@ func (m Model) View() string {
 		b.WriteString("\n")
 
 		b.WriteString(" 回车确认\n")
+	} else if m.preSearchMode {
+		// 预搜索模式：搜索框高亮显示
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render(" 筛选: "))
+		searchView := m.search.View()
+		// 高亮搜索框内容
+		highlightedSearch := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Background(lipgloss.Color("236")).Render(searchView)
+		b.WriteString(highlightedSearch)
+		b.WriteString("\n")
+		b.WriteString(lipgloss.NewStyle().Render(" 回车进入搜索 | 退格清空搜索 | j/ESC 返回列表\n"))
 	} else {
 		b.WriteString(" 筛选: ")
 		searchView := m.search.View()
 		b.WriteString(searchView)
 		b.WriteString("\n")
 		// 显示搜索提示
-
 		b.WriteString(" 按 / 搜索\n")
 	}
 
@@ -282,11 +347,6 @@ func (m Model) View() string {
 	b.WriteString("\n")
 
 	// 列表
-	if !m.searchMode && m.list.SelectedItem() == nil {
-		if len(m.list.Items()) > 0 {
-			m.list.Select(0)
-		}
-	}
 	b.WriteString(m.list.View())
 	b.WriteString("\n")
 
@@ -295,7 +355,7 @@ func (m Model) View() string {
 		b.WriteString(strings.Repeat("─", separatorLen))
 	}
 	b.WriteString("\n")
-	help := " 操作: j/k 移动 | Enter 登录 | / 搜索 | a 添加 | d 删除 | e 编辑 | q 退出"
+	help := " 操作: j/k 移动 h/l 翻页 gG跳转 | Enter 登录 | / 搜索 | a 添加 | d 删除 | e 编辑 | q 退出"
 	b.WriteString(help)
 	b.WriteString("\n")
 	if separatorLen > 0 {
@@ -304,23 +364,6 @@ func (m Model) View() string {
 	b.WriteString("\n")
 
 	return b.String()
-}
-
-// item 列表项
-type item struct {
-	server config.Server
-}
-
-func (i item) FilterValue() string {
-	return i.server.Name + " " + i.server.Description + " " + strings.Join(i.server.Tags, " ")
-}
-
-func (i item) Title() string {
-	return i.server.GetDisplayName()
-}
-
-func (i item) Description() string {
-	return fmt.Sprintf("%s (%s)", i.server.GetAddress(), i.server.User)
 }
 
 // NewModel 创建新的UI模型
@@ -336,8 +379,10 @@ func NewModel() (*Model, error) {
 		items = append(items, item{server: s})
 	}
 
-	// 创建列表
-	delegate := list.NewDefaultDelegate()
+	// 创建列表，使用支持多行的自定义 delegate
+	delegate := multiLineDelegate{
+		DefaultDelegate: list.NewDefaultDelegate(),
+	}
 	// 设置选中样式（使用lipgloss颜色）
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(lipgloss.Color("212"))
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(lipgloss.Color("240"))
@@ -346,12 +391,15 @@ func NewModel() (*Model, error) {
 	l.Title = ""
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
+	l.SetShowHelp(false)
+	// 隐藏标题样式，避免显示蓝色方块（设置为完全透明）
+	l.Styles.Title = lipgloss.NewStyle().Foreground(lipgloss.Color("")).Background(lipgloss.Color("")).Width(0).Height(0)
 	l.Styles.PaginationStyle = list.DefaultStyles().PaginationStyle
 	l.Styles.HelpStyle = list.DefaultStyles().HelpStyle
 
 	// 创建搜索输入框
 	search := textinput.New()
-	search.Placeholder = "输入服务器名称、描述或标签..."
+	search.Placeholder = "输入名称、描述、标签、IP 或用户名..."
 	search.CharLimit = 100
 	search.Width = 50
 
@@ -363,76 +411,6 @@ func NewModel() (*Model, error) {
 	}
 
 	return m, nil
-}
-
-// refreshList 刷新列表
-func (m *Model) refreshList() {
-	// 应用搜索过滤
-	searchTerm := strings.ToLower(m.search.Value())
-	filtered := make([]list.Item, 0)
-
-	for _, s := range m.config.Servers {
-		// 分组过滤
-		if m.selectedGroup != "" && s.Group != m.selectedGroup {
-			continue
-		}
-
-		// 标签过滤
-		if len(m.selectedTags) > 0 {
-			matched := false
-			for _, tag := range m.selectedTags {
-				if slices.Contains(s.Tags, tag) {
-					matched = true
-				}
-				if matched {
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
-
-		// 搜索过滤
-		if searchTerm != "" {
-			searchable := strings.ToLower(s.Name + " " + s.Description + " " + strings.Join(s.Tags, " "))
-			if !strings.Contains(searchable, searchTerm) {
-				continue
-			}
-		}
-
-		filtered = append(filtered, item{server: s})
-	}
-
-	m.list.SetItems(filtered)
-	m.list.ResetFilter()
-}
-
-// connectToServer 连接到服务器
-func connectToServer(s config.Server) {
-	fmt.Printf("正在连接到 %s (%s)...\n", s.Name, s.GetAddress())
-
-	authConfig := ssh.AuthConfig{
-		Type:         s.Auth.Type,
-		Password:     s.Auth.Password,
-		IdentityFile: s.Auth.IdentityFile,
-	}
-
-	if err := ssh.Connect(s.Hostname, s.User, s.Port, authConfig); err != nil {
-		fmt.Printf("连接失败: %v\n", err)
-		return
-	}
-
-	// 更新最后使用时间
-	s.UpdateLastUsed()
-	cfg, _ := config.Load()
-	for i := range cfg.Servers {
-		if cfg.Servers[i].Name == s.Name {
-			cfg.Servers[i].UpdateLastUsed()
-			config.Save(cfg)
-			break
-		}
-	}
 }
 
 // Run 运行交互式界面
